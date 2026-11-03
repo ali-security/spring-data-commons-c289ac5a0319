@@ -1,0 +1,95 @@
+# Sealed-libraries build: upstream builds and tests on Jenkins (Jenkinsfile ->
+# "test: baseline (main)" on eclipse-temurin 17 and "test: baseline (next)" on 21),
+# with no GitHub Actions workflow that builds or tests. This mirrors those stages.
+name: Seal Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional surefire -Dtest selector; empty runs the full suite"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    name: build-and-test (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["17", "21"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Build and test
+        env:
+          MAVEN_OPTS: "-Duser.name=spring-builds+jenkins"
+        run: |
+          COMMON="-s settings.xml -Dscan=false -Dgradle.cache.local.enabled=false -Dgradle.cache.remote.enabled=false"
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./mvnw $COMMON clean verify -Dsort -B -U -Dtest='${{ inputs.test-filter }}' -Dsurefire.failIfNoSpecifiedTests=false
+          else
+            ./mvnw $COMMON clean dependency:list verify -Dsort -B -U
+          fi
+
+      - name: Report test results and skipped tests
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, re, xml.etree.ElementTree as ET
+          tot = fail = err = skip = 0
+          skipped = []
+          for f in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
+              r = ET.parse(f).getroot()
+              tot += int(r.get("tests", 0)); fail += int(r.get("failures", 0))
+              err += int(r.get("errors", 0)); skip += int(r.get("skipped", 0))
+              for tc in r.iter("testcase"):
+                  s = tc.find("skipped")
+                  if s is not None:
+                      msg = s.get("message") or (s.text or "") or "no message (@Disabled without reason)"
+                      msg = re.sub(r"\s+", " ", msg).strip()
+                      skipped.append(f"{tc.get('classname')}.{tc.get('name')}: {msg}")
+          # Why upstream skips a parameter case whose assumption message names no cause.
+          notes = {
+              "ClassGeneratingPropertyAccessorFactoryTests.shouldSetAndGetProperty(Object, String, Class, String)[89]":
+                  "parameter set 89 is the 'Class in default package' case, which parameters() adds with an empty "
+                  "propertyName on purpose (it only exercises shouldSupportGeneratedPropertyAccessors); the test's "
+                  "assumeThat(propertyName).isNotEmpty() skips get/set for it by design",
+          }
+          def assume_lines(cls, method):
+              src = glob.glob("src/test/**/" + cls.split(".")[-1].split("$")[0] + ".*", recursive=True)
+              out = []
+              for p in src:
+                  body = open(p, encoding="utf-8").read()
+                  m = re.search(r"\b" + re.escape(method.split("(")[0]) + r"\s*\(", body)
+                  if m:
+                      chunk = body[m.start():m.start() + 4000]
+                      out += [l.strip() for l in chunk.splitlines() if re.search(r"\bassum", l, re.I)][:2]
+              return out
+          print(f"SUREFIRE SUMMARY: tests={tot} passed={tot-fail-err-skip} failures={fail} errors={err} skipped={skip}")
+          for s in skipped:
+              print("SKIPPED:", s)
+              key = s.split(": ", 1)[0]
+              cls, _, meth = key.split("(")[0].rpartition(".")
+              for k, v in notes.items():
+                  if key.endswith(k):
+                      print("   reason:", v)
+              for l in assume_lines(cls, meth):
+                  print("   assumption in source:", l)
+          EOF
+
+      - name: Upload jar
+        if: matrix.java == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-data-commons-jar
+          path: target/spring-data-commons-3.3.1.jar
+          if-no-files-found: error

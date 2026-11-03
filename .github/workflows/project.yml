@@ -3,16 +3,12 @@
 name: Spring Data GitHub Issues
 
 on:
-  issues:
-    types: [opened, edited, reopened]
-  issue_comment:
-    types: [created]
-  pull_request_target:
-    types: [opened, edited, reopened]
+  workflow_dispatch:
 
 jobs:
   Inbox:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.repository_owner == 'spring-projects' && (github.event.action == 'opened' || github.event.action == 'reopened') && github.event.pull_request == null
     steps:
       - name: Create or Update Issue Card
@@ -24,6 +20,7 @@ jobs:
           token: ${{ secrets.GH_ISSUES_TOKEN_SPRING_DATA }}
   Pull-Request:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.repository_owner == 'spring-projects' && (github.event.action == 'opened' || github.event.action == 'reopened') && github.event.pull_request != null
     steps:
       - name: Create or Update Pull Request Card
@@ -36,6 +33,7 @@ jobs:
           token: ${{ secrets.GH_ISSUES_TOKEN_SPRING_DATA }}
   Feedback-Provided:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.repository_owner == 'spring-projects' && github.event_name == 'issue_comment' && github.event.action == 'created' && github.actor != 'spring-projects-issues' && github.event.pull_request == null && github.event.issue.state == 'open' && contains(toJSON(github.event.issue.labels), 'waiting-for-feedback')
     steps:
       - name: Update Project Card
