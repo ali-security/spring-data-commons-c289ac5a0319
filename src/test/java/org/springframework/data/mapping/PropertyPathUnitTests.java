@@ -20,12 +20,15 @@ import static org.springframework.data.mapping.PropertyPath.from;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.data.util.Lazy;
 import org.springframework.data.util.TypeInformation;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Unit tests for {@link PropertyPath}.
@@ -467,6 +470,28 @@ class PropertyPathUnitTests {
 	@Test // DATACMNS-1304
 	void detectsNestedSingleCharacterProperty() {
 		assertThat(from("category_B", Product.class).toDotPath()).isEqualTo("category.b");
+	}
+
+	@Test // GH-3492
+	@SuppressWarnings("unchecked")
+	void doesNotRetainUnknownPropertyNamesOfFailedLookups() {
+
+		TypeInformation<?> type = TypeInformation.of(Foo.class);
+
+		assertThat(PropertyPath.from("userName", type).toDotPath()).isEqualTo("userName");
+
+		for (var i = 0; i < 5_000; i++) {
+
+			var source = "attackerSupplied" + i;
+
+			assertThatExceptionOfType(PropertyReferenceException.class) //
+					.isThrownBy(() -> PropertyPath.from(source, type));
+		}
+
+		var fields = (Lazy<Map<String, ?>>) ReflectionTestUtils.getField(type, "fields");
+
+		assertThat(fields.get()).containsKey("userName");
+		assertThat(fields.get().keySet()).noneMatch(it -> it.toLowerCase(Locale.ROOT).startsWith("attacker"));
 	}
 
 	private class Foo {
